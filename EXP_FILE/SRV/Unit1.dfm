@@ -3,7 +3,7 @@ object Main: TMain
   Top = 135
   BorderIcons = [biSystemMenu]
   BorderStyle = bsDialog
-  Caption = 'File exchange manager 1.2'
+  Caption = 'File exchange manager 1.4'
   ClientHeight = 69
   ClientWidth = 376
   Color = clBtnFace

@@ -30,6 +30,8 @@ type
     LogFile: String;
     dCloseTime: TDateTime;
     bCloseTime: boolean;
+    ErrorCount,MaxErrorCount: integer;
+
   public
     { Public declarations }
   end;
@@ -72,8 +74,8 @@ procedure StopFileCrt;
   end;
 procedure OpenLog;
   begin
-  AssignFile(LF,FN);
-  if FileExists(FN) then
+  AssignFile(LF,LogFile);
+  if FileExists(LogFile) then
     Append(LF)
     else
     Rewrite(LF);
@@ -83,7 +85,7 @@ procedure OpenLog;
   end;
 procedure SaveLog;
   begin
-  if FileExists(FN) then
+  if FileExists(LogFile) then
     Append(LF)
     else
     Rewrite(LF);
@@ -99,7 +101,7 @@ procedure CloseLog;
   begin
   if (Regime>0) and (Regime<10) then
     begin
-    if FileExists(FN) then
+    if FileExists(LogFile) then
       Append(LF)
       else
       Rewrite(LF);
@@ -152,6 +154,8 @@ procedure PrintIniExample;
   end;
 begin
 bERR:=False;
+MaxErrorCount:=10;
+ErrorCount:=0;
 if ParamCount=1 then
   if (ParamStr(1)='-V') or (ParamStr(1)='-v') then
     begin
@@ -271,6 +275,7 @@ if not ORAConnection.Connected then
   end
   else
   begin
+  MaxErrorCount:=INI.ReadInteger('FILE','ERR_COUNT',10);
   PropList := TStringList.Create;
   F_PATH:=trim(INI.ReadString('FILE','EXE_FILE_PATH',''));
   Label1.Caption:='Connectted '+ORAConnection.Params.Values['User_Name']+'@'+ORAConnection.Params.Values['DataBase']+'.' ;Application.ProcessMessages;
@@ -328,6 +333,8 @@ end;
 procedure TMain.Timer1Timer(Sender: TObject);
 var P, S, ERR: String;
     VR: Variant;
+    bERR: boolean;
+    SS: TStringList;
 procedure run(const sFileName: String);
   var
   g:TStartupInfo;
@@ -341,8 +348,10 @@ if V.Active then
   V.Refresh
   else
   V.Active:=True;
+
 while not V.Eof do
   begin
+  bERR:=False;
   if V.FieldByName('sCOMMAND').AsString = 'RUN' then
     begin
     S:=V.FieldByName('sPARAMS').AsString;
@@ -350,22 +359,57 @@ while not V.Eof do
     P:=PropList.Values['EXE'];
     try
       run(F_PATH+P);
+
       except on E: Exception do
+        begin
         ERR:=E.Message;
+        SaveLogFile('('+DateTimeToStr(now)+
+                    ') Команда "RUN '+P+
+                    '" закончилась с ошибкой:'+#10+
+                    E.Message
+                   );
+        bERR:=True;
+        end;
       end;
 
-    OraProc.Params.ParamByName('nRN').Value:=V.FieldByName('nRN').Value;
-    OraProc.Params.ParamByName('sPARAMS').AsString:='ERR='+ERR;
-    OraProc.ExecProc;
-    SaveLogFile('('+DateTimeToStr(now)+') RUN '+P);
+    try
+      OraProc.Params.ParamByName('nRN').Value:=V.FieldByName('nRN').Value;
+      OraProc.Params.ParamByName('sPARAMS').AsString:='ERR='+ERR;
+      OraProc.ExecProc;
+      except on E: Exception do
+        begin
+        bERR:=True;
+        SaveLogFile('('+DateTimeToStr(now)+') Отсылка ответа на запрос "RUN" не удалась!'+#10+E.Message);
+        end;
+      end;
+    if not bERR then SaveLogFile('('+DateTimeToStr(now)+') RUN '+P);
+
     end
     else if V.FieldByName('sCOMMAND').AsString = 'CHECK' then
       begin
-      OraProc.Params.ParamByName('nRN').AsString:=V.FieldByName('nRN').AsString;
-      OraProc.Params.ParamByName('sPARAMS').AsString:='CHECK=TRUE';
-      OraProc.ExecProc;
-      SaveLogFile('('+DateTimeToStr(now)+') CHECK');
+      try
+        OraProc.Params.ParamByName('nRN').AsString:=V.FieldByName('nRN').AsString;
+        OraProc.Params.ParamByName('sPARAMS').AsString:='CHECK=TRUE';
+        OraProc.ExecProc;
+        SaveLogFile('('+DateTimeToStr(now)+') CHECK');
+        except on E: Exception do
+          begin
+          bERR:=True;
+          SaveLogFile('('+DateTimeToStr(now)+') Отсылка ответа на запрос "CHECK" не удалась!'+#10+E.Message);
+          end;
+        end;
       end;
+    if bERR then
+      if ErrorCount>MaxErrorCount then
+        begin
+        SaveLogFile('('+DateTimeToStr(now)+') Превышено максимальное число ошибок ('+IntToStr(MaxErrorCount)+').');
+        SaveLogFile('end EXCHANGE('+DateTimeToStr(now)+') Сервис необходимо перезапустить.');
+        Close;
+        exit
+        end
+        else
+        inc(ErrorCount);
+
     V.Next;
     end;
 //V.Active:=False;
