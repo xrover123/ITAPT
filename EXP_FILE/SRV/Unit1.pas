@@ -31,6 +31,7 @@ type
     dCloseTime: TDateTime;
     bCloseTime: boolean;
     ErrorCount,MaxErrorCount: integer;
+    sAnswer: String;
 
   public
     { Public declarations }
@@ -42,7 +43,7 @@ var
 implementation
 
 {$R *.dfm}
-uses IniFiles, EasyCript, NetConf, FileFunc;
+uses IniFiles, EasyCript, NetConf, FileFunc, RunProgram;
 
 const LR:char=chr(10);
 
@@ -159,7 +160,8 @@ ErrorCount:=0;
 if ParamCount=1 then
   if (ParamStr(1)='-V') or (ParamStr(1)='-v') then
     begin
-    Label1.Caption:='Version 1.1.1.1';
+    Label1.Caption:='Version 2.2';
+    PB.Visible:=False;
     exit
     end;
 Label1.Caption:='Диспечер файлового обмена.'; Application.ProcessMessages;
@@ -173,7 +175,11 @@ INI:=TINIFile.Create(FN);
 S := UpperCase(INI.ReadString('OTHERS','REGIME','0'));
 if (S='0') or (S='SILENCE') or (S='SILENT') then
   begin
-  FN:=trim(INI.ReadString('OTHERS','LOG',''))+trim(INI.ReadString('OTHERS','COMMAND_LOG',''));
+  FN:=trim(INI.ReadString('OTHERS','LOG',''));
+  if FN[Length(FN)]='\' then
+    FN:=FN+trim(INI.ReadString('OTHERS','COMMAND_LOG',''))
+    else
+    FN:=trim(INI.ReadString('OTHERS','COMMAND_LOG',FN));
   LogFile:=FN;
   if length(FN)>0 then
     begin
@@ -223,7 +229,7 @@ if bErr then
     SetLog(sErr,LR)
     else
     begin
-    CloseFromError('Процедура определения ID компьютера выдала ошибку: '+sErr);
+    CloseFromError('Процедура получения ключа выдала ошибку: '+sErr);
     exit
     end;
 
@@ -277,7 +283,7 @@ if not ORAConnection.Connected then
   begin
   MaxErrorCount:=INI.ReadInteger('FILE','ERR_COUNT',10);
   PropList := TStringList.Create;
-  F_PATH:=trim(INI.ReadString('FILE','EXE_FILE_PATH',''));
+  F_PATH:=trim(INI.ReadString('FILE','EXE_FILE_PATH',ExtractFilePath(ParamStr(0))));
   Label1.Caption:='Connectted '+ORAConnection.Params.Values['User_Name']+'@'+ORAConnection.Params.Values['DataBase']+'.' ;Application.ProcessMessages;
   OraProc.StoredProcName:=trim(INI.ReadString('DB','COMMAND_PROC',''));
   if OraProc.StoredProcName<>'' then
@@ -304,7 +310,7 @@ if not ORAConnection.Connected then
 
   Label1.Caption:='Подключение к БД произошло удачно.';Application.ProcessMessages;
   SetLog(Label1.Caption,LR);
-
+  sAnswer := trim(INI.ReadString('FILE','ANSWER',ExtractFilePath(ParamStr(0))+'Answer.prm'));
   end;
 //ORAConnection.Commit(TS);
 Timer1:=TTimer.Create(self);
@@ -335,12 +341,27 @@ var P, S, ERR: String;
     VR: Variant;
     bERR: boolean;
     SS: TStringList;
-procedure run(const sFileName: String);
+    sRN: String;
+procedure run(const sFileName: String; var sERR: String);
   var
   g:TStartupInfo;
   h:TProcessInformation;
   begin
-  CreateProcess(nil,PChar(sFileName),nil,nil,false,NORMAL_PRIORITY_CLASS,nil,nil,g,h);
+  try
+    if not RunEXEAndWait(sFileName,'',ExtractFilePath(sFileName)) then
+      sERR:='Произошла ошибка при запуске exe-файла.';
+
+    except on E: Exception do
+      begin
+      sERR:=E.Message;
+      SaveLogFile('('+DateTimeToStr(now)+
+                  ') Команда "RUN '+P+
+                  '" закончилась с ошибкой:'+#10+
+                  E.Message
+                 );
+      bERR:=True;
+      end;
+    end;
   end;
 begin
 try
@@ -357,24 +378,24 @@ while not V.Eof do
     S:=V.FieldByName('sPARAMS').AsString;
     PropList.Text:=S;
     P:=PropList.Values['EXE'];
-    try
-      run(F_PATH+P);
+    sRN:=V.FieldByName('nRN').AsString;
+    if FileExists(sAnswer) then DeleteFile(sAnswer);
 
-      except on E: Exception do
-        begin
-        ERR:=E.Message;
-        SaveLogFile('('+DateTimeToStr(now)+
-                    ') Команда "RUN '+P+
-                    '" закончилась с ошибкой:'+#10+
-                    E.Message
-                   );
-        bERR:=True;
-        end;
-      end;
+    //V.Active:=False;
+    //ORAConnection.Connected:=False;
+
+    run(F_PATH+P,ERR);
+
+    //ORAConnection.Connected:=True;
+    //V.Active:=True;
+
+    SS:=TStringList.Create;
+    if FileExists(sAnswer) then SS.LoadFromFile(sAnswer);
 
     try
-      OraProc.Params.ParamByName('nRN').Value:=V.FieldByName('nRN').Value;
-      OraProc.Params.ParamByName('sPARAMS').AsString:='ERR='+ERR;
+      OraProc.Params.ParamByName('nRN').AsString:=sRN;
+      if length(ERR)>0 then SS.Add('RUN_ERR='+ERR);
+      OraProc.Params.ParamByName('sPARAMS').AsString:=SS.Text;
       OraProc.ExecProc;
       except on E: Exception do
         begin
@@ -382,8 +403,11 @@ while not V.Eof do
         SaveLogFile('('+DateTimeToStr(now)+') Отсылка ответа на запрос "RUN" не удалась!'+#10+E.Message);
         end;
       end;
-    if not bERR then SaveLogFile('('+DateTimeToStr(now)+') RUN '+P);
 
+    SS.Free;
+
+    if not bERR then SaveLogFile('('+DateTimeToStr(now)+') RUN '+P);
+    //continue;
     end
     else if V.FieldByName('sCOMMAND').AsString = 'CHECK' then
       begin
@@ -443,10 +467,11 @@ end;
 
 procedure TMain.FormClose(Sender: TObject; var Action: TCloseAction);
 begin
-if not bERR then
-  begin
-  SaveLogFile('end EXCHANGE('+DateTimeToStr(now)+')');
-  end;
+if PB.Visible then
+  if not bERR then
+    begin
+    SaveLogFile('end EXCHANGE('+DateTimeToStr(now)+')');
+    end;
 end;
 
 end.

@@ -16,6 +16,8 @@ type
   private
     { Private declarations }
     Regime: byte;
+    bSuccess_all: boolean;
+    sFiles_all: string;
   public
     { Public declarations }
   end;
@@ -47,6 +49,12 @@ var INI: TINIFile;
     bErr: boolean;
     sERR: String;
     sSQL: String;
+    MemoryStream: TMemoryStream;
+    FileStream: TFileStream;
+    RetryCount, MaxRetries: integer;
+    bSuccess, bSetPath: boolean;
+    sAnswer, sSourceFile: String;
+    RetryDelayMs: integer;
     //SP: TSQLStoredProc;
 procedure StopFileCrt;
   var F: File;
@@ -65,31 +73,47 @@ procedure OpenLog;
   WriteLn(LF,'begin EXPORT('+DateTimeToStr(now)+')');
   LogCnt:=0;
   end;
-procedure SaveLog(N: integer);
+procedure SaveLog;
   begin
-  if (length(LOG)<>0) and (LogCnt>=N) then
+  if (length(LOG)<>0) then
     begin
     WriteLN(LF,LOG);
     setLength(LOG,0);
-    LogCnt:=0;
+//    LogCnt:=0;
     end;
   end;
-procedure SetLog(const MSG,endChar: String);
+procedure SetLog(const MSG: String);
   begin
-  LOG:=LOG+DateTimeToStr(now)+' '+MSG+endChar;
-  inc(LogCnt);
-  SaveLog(50);
+  LOG:=LOG+DateTimeToStr(now)+' '+MSG;
+//  inc(LogCnt);
+  SaveLog;
   end;
-procedure CloseLog;
+procedure SetAnsw(var SS: TStringlist);
+  begin
+  if bSuccess_all then
+    SS.Add('SUCCESS=TRUE')
+    else
+    SS.Add('SUCCESS=FALSE');
+  if length(sFiles_all)>0 then SS.Add('FILES='+sFiles_all);
+  end;
+procedure CloseLog(bAnsw: boolean);
+  var SS: TStringList;
   begin
   if (Regime>0) and (Regime<10) then
     begin
-    SaveLog(0);
+    SaveLog;
     WriteLn(LF,'end EXPORT('+DateTimeToStr(now)+')'+LR);
     try
     CloseFile(LF);
     finally;
     end;
+    if bAnsw then
+      begin
+      SS := TStringList.Create;
+      SetAnsw(SS);
+      SS.SaveToFile(sAnswer);
+      SS.Free;
+      end;
     end;
   end;
 procedure ShowException(MSG: String);
@@ -98,13 +122,22 @@ procedure ShowException(MSG: String);
     ShowMessage(MSG)
   else if Regime>0 then
     begin
-    SetLog(MSG,'');
-    CloseLog;
+    SetLog(MSG);
+    CloseLog(False);
     end;
   end;
-procedure CloseFromError(MSG: String);
+procedure CloseFromError(const MSG,FName,sERR: String);
+  var SS: TStringList;
   begin
   ShowException(MSG);
+  SS:=TStringList.Create;
+  bSuccess_all:=False;
+  setAnsw(SS);
+  if FName <> '' then SS.Add('FILE='+FName);
+  if sERR <> '' then SS.Add('ERROR='+sERR);
+  if FileExists(sAnswer) then DeleteFile(sAnswer);
+  SS.SaveToFile(sAnswer);
+  SS.Free;
   INI.Free;
   Close;
   end;
@@ -131,26 +164,48 @@ procedure PrintIniExample;
     Close
     end;
   end;
-begin
 
+procedure CloseFileSleep;
+  begin
+  if Assigned(FileStream) then FileStream.Free;
+  if RetryCount < MaxRetries then
+    Sleep(RetryDelayMs)
+    else
+    begin
+    CloseFromError('Файл "'+sSourceFile+'" не был звписан!',sSourceFile,'Файл не передан!');
+    exit
+    end;
+  end;
+
+begin
+bSuccess_all:=True;
+sFiles_all:='';
 if ParamCount=1 then
   if (ParamStr(1)='-V') or (ParamStr(1)='-v') then
     begin
-    Label1.Caption:='Version 1.1.1.1';
+    Label1.Caption:='Version 2.2';
     exit
     end;
-Label1.Caption:='Импорт данных из CSV файлов.'; Application.ProcessMessages;
-FN := ExtractFilePath(ParamStr(0))+'imp.ini';
+Label1.Caption:='Экспорт данных в CSV файлы.'; Application.ProcessMessages;
+FN := ExtractFilePath(ParamStr(0))+'exchange.ini';
 if not FileExists(FN) then PrintIniExample;
 
 try
 INI:=TINIFile.Create(FN);
 
+RetryDelayMs := INI.ReadInteger('FILE','DELAY',10000);
+MaxRetries := INI.ReadInteger('FILE','MAX_RET',36);
+sAnswer := INI.ReadString('FILE','ANSWER',ExtractFilePath(ParamStr(0))+'Answer.prm');
 
 S := UpperCase(INI.ReadString('OTHERS','REGIME','0'));
 if (S='0') or (S='SILENCE') or (S='SILENT') then
   begin
-  FN:=trim(INI.ReadString('OTHERS','EXP_LOG',''));
+  FN:=trim(INI.ReadString('OTHERS','LOG',''));
+  {$B-}
+  if (length(FN)=0) or (FN[length(FN)]<>'\') then
+    FN:=trim(INI.ReadString('OTHERS','EXP_LOG',''))
+    else
+    FN:=FN+trim(INI.ReadString('OTHERS','EXP_LOG',''));
   if length(FN)>0 then
     begin
     OpenLog;
@@ -173,7 +228,7 @@ if WAIT_INT>0 then
     inc(i,WAIT_INT);
     if i> WAIT_TIME then
       begin
-      CloseFromError('Файл блокировки "'+EXP_END+'" не удален. Время ожидания прошло!');
+      CloseFromError('Файл блокировки "'+EXP_END+'" не удален. Время ожидания прошло!','','Файл блокировки не удален!');
       exit;
       end;
     end;
@@ -189,10 +244,10 @@ try
   end;
 if bErr then
   if ParamCount>=2 then
-    SetLog(sErr,LR)
+    SetLog(sErr)
     else
     begin
-    CloseFromError('Процедура определения ID компьютера выдала ошибку: '+sErr);
+    CloseFromError('Процедура определения ID компьютера выдала ошибку: '+sErr,'','Не получен ключ расшифровки пароля');
     exit
     end;
 
@@ -232,14 +287,15 @@ try
       LR+'DBName='+ORAConnection.Params.Values['DataBase']+
       LR+'USER='+ORAConnection.Params.Values['User_Name']+
       //LR+'Password='+ORAConnection.Params.Values['Password']+
-      LR+LR+E.Message
+      LR+LR+E.Message,
+      '','Ошибка присоединения к ORACLE.'
       );
     exit
     end;
   end;
 if not ORAConnection.Connected then
   begin
-  CloseFromError('База данных закрыта!');
+  CloseFromError('База данных закрыта!','','База данных закрыта!');
   exit
   end
   else
@@ -256,19 +312,55 @@ if not ORAConnection.Connected then
   sSQL := trim(INI.ReadString('DB','EXP_LOAD_VIEW',''));
   if sSQL='' then
     begin
-    CloseFromError('Не задана процедура експорта файла.');
+    CloseFromError('Не задано представления для експорта файла.','','Не задано представление экспорта файлов!');
     exit
     end;
   V.SQL.Text:='select FileBuff,FileName from '+sSQL;
   V.Active:=True;
+  MemoryStream := TMemoryStream.Create;
+  bSetPath:=True;
   while not V.Eof do
     begin
-    (V.FieldByName('FileBuff') as TBlobField).SaveToFile(F_PATH+V.FieldByName('FileName').AsString);
+    if bSetPath then
+      begin
+      SetLog('Директория экспорта: '+F_PATH);
+      bSetPath:=False;
+      end;
+    MemoryStream.Clear;
+    //(V.FieldByName('FileBuff') as TBlobField).SaveToFile(F_PATH+V.FieldByName('FileName').AsString);
+    (V.FieldByName('FileBuff') as TBlobField).SaveToStream(MemoryStream);
+    MemoryStream.Position := 0;
+    RetryCount := 0;
+    bSuccess := False;
+    repeat
+      try
+        sSourceFile:=F_PATH+V.FieldByName('FileName').AsString;
+        FileStream := TFileStream.Create(sSourceFile, fmCreate or fmShareExclusive);
+        try
+          // Копируем данные из MemoryStream в файл
+          FileStream.CopyFrom(MemoryStream, MemoryStream.Size);
+          bSuccess:=True;
+          finally
+          FileStream.Free;
+          Inc(RetryCount);
+          if not bSuccess then Sleep(RetryDelayMs);
+          end;
+        except on E: Exception{EFOpenError} do
+          CloseFileSleep;
+        end;
+      until bSuccess or (RetryCount < MaxRetries);
+    bSuccess_all:=bSuccess_all and bSuccess;
+    if length(sFiles_all)=0 then
+      sFiles_all:=V.FieldByName('FileName').AsString
+      else
+      sFiles_all:=sFiles_all+';'+V.FieldByName('FileName').AsString;
+
+    Label1.Caption:='Импорт файла '+sSourceFile+' выполнен.';Application.ProcessMessages;
+    SetLog(Label1.Caption);
+
     V.Next;
     end;
   V.Active:=False;
-  Label1.Caption:='Импорт файла '+FN+' выполнен.';Application.ProcessMessages;
-  SetLog(Label1.Caption,LR);
 
   OraProc.Prepared:=False;
   OraProc.StoredProcName:=trim(INI.ReadString('DB','EXP_CLEAR_PROC',''));
@@ -280,16 +372,14 @@ if not ORAConnection.Connected then
   end;
 //ORAConnection.Commit(TS);
 INI.Free;
-if (Regime>0) and (Regime<10) then CloseLog;
+if (Regime>0) and (Regime<10) then CloseLog(True);
 Close;
 except on E:Exception do
   begin
   //ORAConnection.Rollback(TS);
   if (Regime>0) and (Regime<10) then
     begin
-    SetLog(E.Message,LR);
-    SaveLog(0);
-    CloseLog
+    CloseFromError(E.Message,'','Глобальная ошибка см. лог-файл.');
     end
   else if Regime>=10 then ShowMessage('Ошибка: ' + E.Message);
   if INI<>nil then

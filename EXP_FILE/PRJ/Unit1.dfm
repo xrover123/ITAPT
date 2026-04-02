@@ -1,9 +1,11 @@
 object Main: TMain
   Left = 423
   Top = 134
-  Width = 392
-  Height = 105
-  Caption = 'Expot file from PARUS'
+  BorderIcons = [biSystemMenu]
+  BorderStyle = bsSingle
+  Caption = 'Expot file from PARUS 2.2'
+  ClientHeight = 66
+  ClientWidth = 376
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
   Font.Color = clWindowText
@@ -11,6 +13,7 @@ object Main: TMain
   Font.Name = 'MS Sans Serif'
   Font.Style = []
   OldCreateOrder = False
+  Position = poDesktopCenter
   OnShow = FormShow
   PixelsPerInch = 96
   TextHeight = 13
