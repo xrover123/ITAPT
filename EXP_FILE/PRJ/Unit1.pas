@@ -31,9 +31,31 @@ implementation
 uses IniFiles, EasyCript, NetConf, FileFunc;
 
 const LR:char=chr(10);
+var sFileErr: String;
 
 function GetPC: word; stdcall;
   external 'NetParam.dll' name 'GetPCCode';
+
+function DelFile(FileName: String): boolean;
+var i: cardinal;
+begin
+if FileExists(FileName) then
+  if not DeleteFile(PChar(FileName)) then
+    begin
+    i:=GetLastError;
+    case i of
+      ERROR_FILE_NOT_FOUND: sFileErr:='Файл "'+FileName+'" не найден.';
+      ERROR_PATH_NOT_FOUND: sFileErr:='Путь "'+ExtractFilePath(FileName)+'" не найден.';
+      ERROR_ACCESS_DENIED:  sFileErr:='Не хватает прав для удаления "'+ExtractFilePath(FileName)+'".';
+      else                  sFileErr:='Ошибка (код: '+IntToStr(i)+') при удалении файла "'+ExtractFilePath(FileName)+'".';
+      end;
+    end
+  else
+    begin
+    sFileErr:='';
+    result:=true;
+    end;
+end;
 
 
 procedure TMain.FormShow(Sender: TObject);
@@ -59,9 +81,12 @@ var INI: TINIFile;
 procedure StopFileCrt;
   var F: File;
   begin
-  AssignFile(F,EXP_END);
-  Rewrite(F);
-  CloseFile(F);
+  if length(EXP_END)>0 then
+    begin
+    AssignFile(F,EXP_END);
+    Rewrite(F);
+    CloseFile(F);
+    end;
   end;
 procedure OpenLog;
   begin
@@ -84,7 +109,7 @@ procedure SaveLog;
   end;
 procedure SetLog(const MSG: String);
   begin
-  LOG:=LOG+DateTimeToStr(now)+' '+MSG;
+  LOG:=DateTimeToStr(now)+' '+MSG;
 //  inc(LogCnt);
   SaveLog;
   end;
@@ -183,7 +208,7 @@ sFiles_all:='';
 if ParamCount=1 then
   if (ParamStr(1)='-V') or (ParamStr(1)='-v') then
     begin
-    Label1.Caption:='Version 2.2';
+    Label1.Caption:='Version 2.3';
     exit
     end;
 Label1.Caption:='Экспорт данных в CSV файлы.'; Application.ProcessMessages;
@@ -195,7 +220,6 @@ INI:=TINIFile.Create(FN);
 
 RetryDelayMs := INI.ReadInteger('FILE','DELAY',10000);
 MaxRetries := INI.ReadInteger('FILE','MAX_RET',36);
-sAnswer := INI.ReadString('FILE','ANSWER',ExtractFilePath(ParamStr(0))+'Answer.prm');
 
 S := UpperCase(INI.ReadString('OTHERS','REGIME','0'));
 if (S='0') or (S='SILENCE') or (S='SILENT') then
@@ -217,21 +241,28 @@ if (S='0') or (S='SILENCE') or (S='SILENT') then
 else if (S='10') or (S='DEBUG') or (S='SHOW_MESSAGE') then
   Regime:=10;
 
+sAnswer := INI.ReadString('FILE','ANSWER',ExtractFilePath(ParamStr(0))+'Answer.prm');
+if not DelFile(sAnswer) then
+  begin
+  CloseFromError('Файл ответа "'+sAnswer+'" не удален! Ошибка: '+sFileErr,'','Файл ответа не удален!');
+  exit;
+  end;
 EXP_END:=trim(INI.ReadString('FILE','EXP_END_FILE',''));
 WAIT_INT:=INI.ReadInteger('FILE','WAIT_INTERVAL',1000);
 WAIT_TIME:=INI.ReadInteger('FILE','WAIT_HOUR',0)*60*60*1000+INI.ReadInteger('FILE','WAIT_MIN',0)*60*1000;
 i:=0;
-if WAIT_INT>0 then
-  while FileExists(EXP_END) do
-    begin
-    sleep(WAIT_INT);
-    inc(i,WAIT_INT);
-    if i> WAIT_TIME then
+if length(EXP_END)>0 then
+  if WAIT_INT>0 then
+    while FileExists(EXP_END) do
       begin
-      CloseFromError('Файл блокировки "'+EXP_END+'" не удален. Время ожидания прошло!','','Файл блокировки не удален!');
-      exit;
+      sleep(WAIT_INT);
+      inc(i,WAIT_INT);
+      if i> WAIT_TIME then
+        begin
+        CloseFromError('Файл блокировки "'+EXP_END+'" не удален. Время ожидания прошло!','','Файл блокировки не удален!');
+        exit;
+        end;
       end;
-    end;
 
 try
   w := GetPC;//GetCriptCode;

@@ -3,7 +3,7 @@ object Main: TMain
   Top = 134
   Width = 392
   Height = 105
-  Caption = 'Import CSV to Oracle'
+  Caption = 'Import CSV to Oracle 2.3'
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
   Font.Color = clWindowText
@@ -11,6 +11,7 @@ object Main: TMain
   Font.Name = 'MS Sans Serif'
   Font.Style = []
   OldCreateOrder = False
+  OnClose = FormClose
   OnShow = FormShow
   PixelsPerInch = 96
   TextHeight = 13

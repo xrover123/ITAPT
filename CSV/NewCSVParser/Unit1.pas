@@ -13,10 +13,13 @@ type
     OraProc: TSQLStoredProc;
     SP: TSQLStoredProc;
     procedure FormShow(Sender: TObject);
+    procedure FormClose(Sender: TObject; var Action: TCloseAction);
   private
     { Private declarations }
     P: TCSVParser;
     Regime: byte;
+    sAnswer: String;
+    AnswPrm:TStringList;
   public
     { Public declarations }
   end;
@@ -86,6 +89,7 @@ var INI: TINIFile;
     sERR: String;
     ch:char;
     nBuff: integer;
+    sDBN,sDBU,sFiles: String;
     //SP: TSQLStoredProc;
 procedure OpenLog;
   begin
@@ -102,7 +106,8 @@ procedure SaveLog(N: integer);
   if (length(LOG)<>0) and (LogCnt>=N) then
     begin
     WriteLN(LF,LOG);
-    setLength(LOG,0);
+    //LOG:='';
+    SetLength(LOG,0);
     LogCnt:=0;
     end;
   end;
@@ -140,7 +145,12 @@ procedure ShowException(MSG: String);
 procedure CloseFromError(MSG: String);
   begin
   ShowException(MSG);
+  AnswPrm.Clear;
+  AnswPrm.Add('SUCCESS=FALSE');
+  AnswPrm.Add('ERR='+StringReplace(MSG,chr(10),' ',[rfReplaceAll]));
+  AnswPrm.SaveToFile(sAnswer);
   INI.Free;
+  SL.Free;
   Close;
   end;
 procedure PrintIniExample;
@@ -167,22 +177,33 @@ procedure PrintIniExample;
     end;
   end;
 begin
+SL:=nil;
+sFiles:='';
+AnswPrm:=TStringList.Create;
 if ParamCount=1 then
   if (ParamStr(1)='-V') or (ParamStr(1)='-v') then
     begin
-    Label1.Caption:='Version 1.1.1.1';
+    Label1.Caption:='Version 2.3';
     exit
     end;
 Label1.Caption:='Импорт данных из CSV файлов.'; Application.ProcessMessages;
-FN := ExtractFilePath(ParamStr(0))+'imp.ini';
+FN := ExtractFilePath(ParamStr(0))+'exchange.ini';
 if not FileExists(FN) then PrintIniExample;
 
 try
 INI:=TINIFile.Create(FN);
-S := UpperCase(INI.ReadString('OTHERS','REGIME','0'));
+
+S := UpperCase(trim(INI.ReadString('OTHERS','REGIME','0')));
 if (S='0') or (S='SILENCE') or (S='SILENT') then
   begin
+
   FN:=trim(INI.ReadString('OTHERS','LOG',''));
+  {$B-}
+  if (length(FN)=0) or (FN[length(FN)]<>'\') then
+    FN:=trim(INI.ReadString('OTHERS','IMP_LOG',''))
+    else
+    FN:=FN+trim(INI.ReadString('OTHERS','IMP_LOG',''));
+
   LOG_P:=ExtractFilePath(FN);
   if length(FN)>0 then
     begin
@@ -194,6 +215,13 @@ if (S='0') or (S='SILENCE') or (S='SILENT') then
   end
 else if (S='10') or (S='DEBUG') or (S='SHOW_MESSAGE') then
   Regime:=10;
+
+sAnswer := trim(INI.ReadString('FILE','ANSWER',ExtractFilePath(ParamStr(0))+'Answer.prm'));
+if not delFile(sAnswer) then
+  begin
+  CloseFromError('Не удален файл ответа "'+sAnswer+'".');
+  exit;
+  end;
 
 try
   w := GetPC;//GetCriptCode;
@@ -213,20 +241,21 @@ if bErr then
     exit
     end;
 
-DLM:=trim(INI.ReadString('FILE','DLM',','));
+DLM:=trim(INI.ReadString('FILE','IMP_DLM',','));
 Label1.Caption:='Чтение файла инициализации.';Application.ProcessMessages;
 if length(DLM)>0 then
   P:=TCSVParser.Create(DLM[1])
   else
   P:=TCSVParser.Create(',');
-
-ORAConnection.Params.Values['DataBase']:=INI.ReadString('DB','DB_NAME',ParamStr(1));
-ORAConnection.Params.Values['User_Name']:=INI.ReadString('DB','USER',ParamStr(2));
+sDBN:=trim(INI.ReadString('DB','DB_NAME',''));
+sDBU:=trim(INI.ReadString('DB','USER',''));
+ORAConnection.Params.Values['DataBase']:=sDBN;
+ORAConnection.Params.Values['User_Name']:=sDBU;
 if bErr then
   ORAConnection.Params.Values['Password'] := ParamStr(3)
   else
   begin
-  PSW := INI.ReadString('DB','PSW','');
+  PSW := trim(INI.ReadString('DB','PSW',''));
   if PSW='' then
     PSW := ParamStr(3)
     else
@@ -259,6 +288,7 @@ try
     exit
     end;
   end;
+
 if not ORAConnection.Connected then
   begin
   CloseFromError('База данных закрыта!');
@@ -266,6 +296,13 @@ if not ORAConnection.Connected then
   end
   else
   begin
+
+  //Настройка перемещения файла во временную дирректорию для разбора.
+  FileMoveAttempts:=INI.ReadInteger('FILE','IMP_FILE_MOVE_ATT',FileMoveAttempts);
+  FileMoveSleep:=INI.ReadInteger('FILE','IMP_FILE_MOVE_SLEEP',FileMoveSleep);
+  FileMoveTime:=INI.ReadInteger('FILE','IMP_FILE_MOVE_TIME',FileMoveTime);
+  FileMoveTmpDir:=trim(INI.ReadString('FILE','IMP_FILE_MOVE_TMP',ExtractFilePath(ParamStr(0))));
+
   Label1.Caption:='Connectted '+ORAConnection.Params.Values['User_Name']+'@'+ORAConnection.Params.Values['DataBase']+'.' ;Application.ProcessMessages;
   OraProc.StoredProcName:=trim(INI.ReadString('DB','PREP_PROC',''));
   if OraProc.StoredProcName<>'' then
@@ -278,14 +315,18 @@ if not ORAConnection.Connected then
 
   Label1.Caption:='Импорт файлов.';Application.ProcessMessages;
 
-  for j:=0 to SL.Count-1 do
+  for j:=0 to SL.Count-1 do//Цикл по файлам, указанным в INI
     begin
-    FN:= INI.ReadString('FILES',SL.Strings[j],'');
-
+    //В строке содердится имя файла и название процедуры с параметрами, которая
+    FN:= trim(INI.ReadString('FILES',SL.Strings[j],''));//,будет обрабатывать строки
+    //Выделение названия файла и процедуры
     t:=pos(';',FN);
     SP.Prepared:=false;
+    //Выделили подстроку с названием процедуры
     ProcStr:=copy(FN,t+1,Length(FN));
+    //Выделили подстроку с названием файла
     FN := copy(FN,1,t-1);
+    //Выделяем параметры процедуры
     t:=pos('(', ProcStr);
     SP.StoredProcName := trim(copy(ProcStr,1,t-1));
     if SP.StoredProcName='' then
@@ -313,10 +354,13 @@ if not ORAConnection.Connected then
       PL.CommaText:=ProcStr;
       SP.Params.Clear;
       for i:=0 to PL.Count-1 do
+        begin
+        PL.Strings[i]:=trim(PL.Strings[i]);
         with SP.Params.CreateParam(ftString,PL.Strings[i],ptInput) do
           begin
           Size:=2000;
           end;
+        end;
       SP.Prepared:=True;
       PL.Destroy;
       end;
@@ -331,34 +375,52 @@ if not ORAConnection.Connected then
       else
       begin
       nBuff:=INI.ReadInteger('FILE','BUF_SIZE',0);
+      TmpFN:=trim(INI.ReadString('FILE','IMP_FILE_PATH',''))+'~'+ExtractFileNameWOExt(FN)+'.tmp';
+      {
+      Перемещаем файл во временный файл для дальнейшего разбора.
+      Если файл не хочет перемещаться, ждем некоторое время и выходим.
+      Логика различных ожиданий описана в самой процедуре MVFile.
+      }
+      if not MVFile(FN,TmpFN) then
+        begin
+        CloseFromError(FileMoveErr);
+        exit;
+        end;
       P.Open
         (
-        FN,
+        TmpFN,
         nBuff,
         True,
         ProcStr
         );
-
-      if CheckFields(FN,P.FNames,SP,sErr) then
+      if CheckFields(FN,P.FNames,SP,sErr) then //Проверка соответствия полей.
         begin
-        if sErr<>'' then SetLog(sErr,LR);
+        if sErr<>'' then SetLog(sErr,LR); //В любом случае записываем сообщение.
         if P.First then
+          //-----------------------------------
+          //Цикл по записям в файле    (начало)
+          //-----------------------------------
           repeat
             begin
-            for i:=0 to P.FNames.Count-1 do
+            for i:=0 to P.FNames.Count-1 do //Цикл по полям таблицы
               begin
-              //ShowMessage('Name: '+SP.Params.Items[i].Name);
-              PN:=P.FNames.Strings[i];
+              PN:=P.FNames.Strings[i];//Название поля из открытого файла
+              //Назначение параметров оракловой процедуре
               SP.Params.ParamByName(PN).AsString:=P.getFieldByName(PN);
               end;
-            SP.ExecProc;
+            SP.ExecProc;//Выполнение процедуры вставки
             end;
+          DelFile(TmpFN);{Удаляем временный файл ошибки не анализируем,
+                          он же временный...}
+          //-----------------------------------
+          //Цикл по записям в файле (окончание)
+          //-----------------------------------
           until not P.Next;
         P.Close;
         end
-        else
+        else       //Если проверка полей прошла неудачно
         begin
-        CloseFromError(sErr);
+        CloseFromError(sErr);//Пишем в лог и закрываемся
         exit
         end
       end;
@@ -371,8 +433,9 @@ if not ORAConnection.Connected then
       ChangeExt(LOG_F,'ERR');
       LOG_F:=LOG_P+LOG_F;
       P.ErrMessages.SaveToFile(LOG_F);
+      CloseFromError('Ошибки при распознавании файла "'+FN+'".');
       end;
-
+    sFiles:=sFiles+FN+',';
     end;
 
   OraProc.Prepared:=False;
@@ -381,9 +444,20 @@ if not ORAConnection.Connected then
     begin
     OraProc.ExecProc;
     end;  //ADOConnection.CommitTrans;
+  AnswPrm.Clear;
+  AnswPrm.Add('SUCSESS=TRUE');
+  if length(sFiles)>0 then AnswPrm.Add('FILES='+copy(sFiles,1,length(sFiles)-1));
+  AnswPrm.SaveToFile(sAnswer);
+  SL.Free;
+  SL:=nil;
   end;
 //ORAConnection.Commit(TS);
 INI.Free;
+if AnswPrm.Count=0 then
+  begin
+  AnswPrm.Add('SUCCESS=FALSE');
+  AnswPrm.SaveToFile(sAnswer);
+  end;
 if (Regime>0) and (Regime<10) then CloseLog;
 Close;
 except on E:Exception do
@@ -403,6 +477,11 @@ except on E:Exception do
     end;
   end;
 end;
+end;
+
+procedure TMain.FormClose(Sender: TObject; var Action: TCloseAction);
+begin
+AnswPrm.Free;
 end;
 
 end.

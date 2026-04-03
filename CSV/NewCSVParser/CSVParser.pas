@@ -129,7 +129,7 @@ function ParseStr(var S, sVal: String; cDLM: char; var ERR: TStringList): boolea
           SetLength(sVal, t);
           if i + 1 > L then
             begin //Lfkmit идти некуда возвращаемся в вызывающую процедуру
-            setLength(S,0);
+            S:='';//setLength(S,0);
             result:=True;
             exit
             end;
@@ -139,7 +139,7 @@ function ParseStr(var S, sVal: String; cDLM: char; var ERR: TStringList): boolea
               if t<L then
                 S := copy(S, t+1, L-t)
                 else
-                setLength(S,0);
+                S:='';//setLength(S,0);
               result:=True;
               exit;
               end;
@@ -165,7 +165,7 @@ function ParseStr(var S, sVal: String; cDLM: char; var ERR: TStringList): boolea
     inc(i);
     end;
 
-  setLength(S,0);
+  S:='';//setLength(S,0);
   SetLength(sVal,t);
   result:=True;
   end;

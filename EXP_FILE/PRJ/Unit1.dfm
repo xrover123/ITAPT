@@ -3,7 +3,7 @@ object Main: TMain
   Top = 134
   BorderIcons = [biSystemMenu]
   BorderStyle = bsSingle
-  Caption = 'Expot file from PARUS 2.2'
+  Caption = 'Expot file from PARUS 2.3'
   ClientHeight = 66
   ClientWidth = 376
   Color = clBtnFace
