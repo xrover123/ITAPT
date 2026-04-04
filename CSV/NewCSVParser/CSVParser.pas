@@ -52,17 +52,18 @@ type
     bColNames: boolean;
     bEof: boolean;
     cDLM: char;
+    bEscaping: boolean;
     public
     ErrMessage: String;
-    constructor Create(DLM: char);
+    constructor Create(DLM: char; Escaping: boolean);
     function Open(const FName: string; BuffSize: integer; ColNames: boolean; FieldsList: String):boolean;
     procedure Close;
     function First: boolean;
     function Next: boolean;
 //    function ReadRow: boolean;
     end;
-//function ParseStr(var S, sVal: String; cDLM: char): boolean;
-function ParseStr(var S, sVal: String; cDLM: char; var ERR: TStringList): boolean;
+//function ParseStr(var S, sVal: String; cDLM: char; var ERR: TStringList): boolean;
+function ParseStr(var S, sVal: String; cDLM: char; bEscaping: boolean; var ERR: TStringList): boolean;
 
 implementation
 uses {Dialogs, }SysUtils, FileFunc;
@@ -74,16 +75,38 @@ begin
    if isTextOpen(f) then Close( f )
 end;
 
-function ParseStr(var S, sVal: String; cDLM: char; var ERR: TStringList): boolean;
+function ParseStr(var S, sVal: String; cDLM: char; bEscaping: boolean; var ERR: TStringList): boolean;
   var i,j,t,n,L: integer;
       bQuot: boolean;
+      sTMP: String;
   begin
-  n:=0;
+
   if length(S)=0 then
     begin
     result:=false;
     exit;
     end;
+
+  if not bEscaping then
+    begin
+    i:=pos(cDLM,S);
+    if i=0 then
+      begin
+      result:=true;
+      sVal:=S;
+      S:='';
+      end
+    else
+      begin
+      sTMP:=copy(S,i+1,length(S));
+      setLength(S,i-1);
+      sVal:=S;
+      S:=sTMP;
+      end;
+    exit;
+    end;
+  n:=0;
+
   S:=trim(S);
   bQuot:=False;
   j:=1;
@@ -171,10 +194,11 @@ function ParseStr(var S, sVal: String; cDLM: char; var ERR: TStringList): boolea
   end;
 
 
-constructor TCSVParser.Create(DLM: char);
+constructor TCSVParser.Create(DLM: char; Escaping: boolean);
   begin
   inherited Create;
   cDLM:=DLM;
+  bEscaping:=Escaping;
   end;
 
 function TCSVParser.First: boolean;
@@ -215,12 +239,12 @@ function TCSVParser.Next: boolean;
         begin
         ReadLn(F, S);
         j:=0;
-        if ParseStr(S,sVal,cDLM,ErrMessages) then
+        if ParseStr(S,sVal,cDLM,bEscaping,ErrMessages) then
           begin
           nRowNumber:=0;
           CurrentRow:=FirstRow;
           setFieldByInd(nRowNumber, sVal);
-          while ParseStr(SS,sVal,cDLM,ErrMessages) do
+          while ParseStr(SS,sVal,cDLM,bEscaping,ErrMessages) do
             begin
             setFieldByInd(j, sVal);
             inc(j);
@@ -286,10 +310,10 @@ function TCSVParser.Open(const FName: string; BuffSize: integer; ColNames: boole
         else
         begin
         ReadLn(F, S);//Считываем строку с названиями слобцов.
-        if ParseStr(S,sVal,cDLM,ErrMessages) then//Разбираем ее
+        if ParseStr(S,sVal,cDLM,bEscaping,ErrMessages) then//Разбираем ее
           begin
           FNames.Add(sVal); //Если разбор прошел, добавляем первый столбец
-          while ParseStr(S,sVal,cDLM,ErrMessages) do//и обрабатываем дальше строку
+          while ParseStr(S,sVal,cDLM,bEscaping,ErrMessages) do//и обрабатываем дальше строку
             FNames.Add(sVal);
           FieldCNT:=FNames.Count;
           end;
@@ -318,12 +342,12 @@ function TCSVParser.Open(const FName: string; BuffSize: integer; ColNames: boole
         Если есть хотя бы один столбец добавляем строку и приступаем к
         дальнейшей обработке столбцов
         }
-        if ParseStr(S,sVal,cDLM,ErrMessages) and (FieldCNT<>0) then
+        if ParseStr(S,sVal,cDLM,bEscaping,ErrMessages) and (FieldCNT<>0) then
           begin
           AddRow;
           setFieldByInd(i,sVal);
           inc(i);
-          while ParseStr(S,sVal,cDLM,ErrMessages) do
+          while ParseStr(S,sVal,cDLM,bEscaping,ErrMessages) do
             begin
             setFieldByInd(i,sVal);
             inc(i);

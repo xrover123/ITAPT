@@ -241,12 +241,12 @@ if bErr then
     exit
     end;
 
-DLM:=trim(INI.ReadString('FILE','IMP_DLM',','));
+DLM:=trim(INI.ReadString('FILE','IMP_DLM','|'));
 Label1.Caption:='Чтение файла инициализации.';Application.ProcessMessages;
 if length(DLM)>0 then
-  P:=TCSVParser.Create(DLM[1])
+  P:=TCSVParser.Create(DLM[1],INI.ReadBool('FILE','ESCAPING',false))
   else
-  P:=TCSVParser.Create(',');
+  P:=TCSVParser.Create(',',INI.ReadBool('FILE','ESCAPING',false));
 sDBN:=trim(INI.ReadString('DB','DB_NAME',''));
 sDBU:=trim(INI.ReadString('DB','USER',''));
 ORAConnection.Params.Values['DataBase']:=sDBN;
